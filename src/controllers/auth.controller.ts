@@ -4,6 +4,9 @@ import type { RegisterUserDto } from '@/types/user.types.js';
 import prisma from '@/lib/prisma.js';
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
+import { randomBytes } from 'crypto';
+
+import { sendConfirmationEmail } from '@/services/sendEmailService.js';
 
 export const register = async (req: Request, res: Response) => {
   const body: RegisterUserDto = req.body;
@@ -18,16 +21,47 @@ export const register = async (req: Request, res: Response) => {
     return res.status(409).json({ error: 'Email já está em uso.' });
 
   const hashedPassword = await bcrypt.hash(password, 10);
+  const confirmationToken = randomBytes(32).toString('hex');
 
-  const newUser = await prisma.user.create({
+  // Atualiza o confirmationToken se o usuário já existir na base
+  // Cria o usuário se ele ainda não existir na base
+  await prisma.user.upsert({
+    where: { email },
+    update: { confirmationToken },
+    create: { email, password: hashedPassword, confirmationToken },
+  });
+
+  await sendConfirmationEmail(email, confirmationToken);
+
+  res.status(200).json({
+    message: 'E-mail de confirmação enviado. Verifique sua caixa de entrada.',
+  });
+};
+
+export const confirmEmail = async (req: Request, res: Response) => {
+  const { token } = req.query;
+
+  if (!token || typeof token !== 'string')
+    return res.status(400).json({ error: 'Token inválido.' });
+
+  const user = await prisma.user.findUnique({
+    where: { confirmationToken: token },
+  });
+
+  if (!user)
+    return res
+      .status(404)
+      .json({ error: 'Token de confirmação não encontrado ou já utilizado.' });
+
+  await prisma.user.update({
+    where: { id: user.id },
     data: {
-      email,
-      password: hashedPassword,
+      emailVerified: new Date(),
+      confirmationToken: null,
     },
   });
 
-  const { password: _, ...userWithoutPassword } = newUser;
-  res.status(201).json(userWithoutPassword);
+  res.status(200).json({ message: 'E-mail confirmado com sucesso!' });
 };
 
 export const login = async (req: Request, res: Response) => {
@@ -41,6 +75,11 @@ export const login = async (req: Request, res: Response) => {
 
   if (!isPasswordValid)
     return res.status(401).json({ error: 'Senha inválida.' });
+
+  if (!user.emailVerified)
+    return res.status(403).json({
+      error: 'Por favor, confirme seu e-mail antes de fazer o login.',
+    });
 
   // Gerar o token JWT
   const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET as string, {

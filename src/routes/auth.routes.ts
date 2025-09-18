@@ -6,6 +6,7 @@ import { authMiddleware } from '@/middlewares/authMiddleware.js';
 const router = Router();
 
 router.post('/register', AuthController.register);
+router.get('/confirm-email', AuthController.confirmEmail);
 router.post('/login', AuthController.login);
 router.get('/verify-token', authMiddleware, AuthController.verifyToken);
 router.get('/me', authMiddleware, AuthController.me);
